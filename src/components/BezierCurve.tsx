@@ -1,17 +1,23 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import VertexHandle from './VertexHandle';
+
+export interface Point {
+  x: number;
+  y: number;
+}
 
 export interface Vertex {
   id: string;
   x: number;
   y: number;
+  handleIn: Point | null;   // control point arriving at this vertex
+  handleOut: Point | null;  // control point leaving this vertex
 }
 
 export interface CurveSegment {
   id: string;
   startVertexId: string;
   endVertexId: string;
-  p1: { x: number; y: number }; // Control point 1
-  p2: { x: number; y: number }; // Control point 2
 }
 
 interface BezierCurveProps {
@@ -19,11 +25,13 @@ interface BezierCurveProps {
   vertices: Vertex[];
   curves: CurveSegment[];
   isActive?: boolean;
+  selectedVertexId?: string | null;
   onClick?: (id: string) => void;
+  onVertexMouseDown?: (vertexId: string, e: React.MouseEvent) => void;
+  onHandleMouseDown?: (vertexId: string, handle: 'in' | 'out', e: React.MouseEvent) => void;
   activeColor?: string;
   inactiveColor?: string;
   strokeWidth?: number;
-  className?: string;
 }
 
 const BezierCurve: React.FC<BezierCurveProps> = ({
@@ -31,46 +39,76 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
   vertices,
   curves,
   isActive = false,
+  selectedVertexId = null,
   onClick,
+  onVertexMouseDown,
+  onHandleMouseDown,
   activeColor = 'royalblue',
   inactiveColor = '#ccc',
   strokeWidth = 3,
-  className = '',
 }) => {
   if (curves.length === 0) return null;
 
-  const vertexMap = new Map(vertices.map((v) => [v.id, v]));
+  const vertexMap = useMemo(
+    () => new Map(vertices.map((v) => [v.id, v])),
+    [vertices],
+  );
 
-  // Start the path at the first curve's start vertex
-  const firstCurve = curves[0];
-  const firstVertex = vertexMap.get(firstCurve.startVertexId);
+  // Collect unique vertices used by this curve
+  const curveVertices = useMemo(() => {
+    const seen = new Set<string>();
+    const result: Vertex[] = [];
+    for (const seg of curves) {
+      for (const vid of [seg.startVertexId, seg.endVertexId]) {
+        if (!seen.has(vid)) {
+          seen.add(vid);
+          const v = vertexMap.get(vid);
+          if (v) result.push(v);
+        }
+      }
+    }
+    return result;
+  }, [curves, vertexMap]);
+
+  // Build path d-string
+  const firstVertex = vertexMap.get(curves[0].startVertexId);
   if (!firstVertex) return null;
 
   let d = `M ${firstVertex.x} ${firstVertex.y}`;
+  for (const seg of curves) {
+    const start = vertexMap.get(seg.startVertexId);
+    const end = vertexMap.get(seg.endVertexId);
+    if (!start || !end) continue;
 
-  for (const curve of curves) {
-    const endVertex = vertexMap.get(curve.endVertexId);
-    if (!endVertex) continue;
+    // p1 = start vertex's outgoing handle (fallback to start position)
+    const p1 = start.handleOut ?? { x: start.x, y: start.y };
+    // p2 = end vertex's incoming handle (fallback to end position)
+    const p2 = end.handleIn ?? { x: end.x, y: end.y };
 
-    d += ` C ${curve.p1.x} ${curve.p1.y}, ${curve.p2.x} ${curve.p2.y}, ${endVertex.x} ${endVertex.y}`;
+    d += ` C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${end.x} ${end.y}`;
   }
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleCurveClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onClick) onClick(id);
+    onClick?.(id);
   };
 
+  // Find the selected vertex object for rendering its handle lines
+  const selectedVertex = selectedVertexId
+    ? curveVertices.find((v) => v.id === selectedVertexId) ?? null
+    : null;
+
   return (
-    <g className={`bezier-curve ${className}`} onClick={handleClick} style={{ cursor: 'pointer' }}>
-      {/* Hit test path: wide and invisible to make selection easier */}
+    <g style={{ cursor: 'pointer' }} onClick={handleCurveClick}>
+      {/* Wide invisible hit-test path */}
       <path
         d={d}
         stroke="transparent"
-        strokeWidth={strokeWidth + 10}
+        strokeWidth={strokeWidth + 12}
         fill="none"
         pointerEvents="auto"
       />
-      {/* Visual path */}
+      {/* Visible path */}
       <path
         d={d}
         stroke={isActive ? activeColor : inactiveColor}
@@ -78,8 +116,84 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ transition: 'stroke 0.2s ease' }}
+        style={{ transition: 'stroke 0.15s ease' }}
+        pointerEvents="none"
       />
+
+      {/* Vertex handles — only when active */}
+      {isActive &&
+        curveVertices.map((v) => (
+          <VertexHandle
+            key={v.id}
+            id={v.id}
+            x={v.x}
+            y={v.y}
+            isActive={selectedVertexId === v.id}
+            onMouseDown={onVertexMouseDown ?? (() => { })}
+          />
+        ))}
+
+      {/* Control-point handle lines + dots for the selected vertex */}
+      {isActive && selectedVertex && (
+        <g>
+          {selectedVertex.handleIn && (
+            <>
+              <line
+                x1={selectedVertex.x}
+                y1={selectedVertex.y}
+                x2={selectedVertex.handleIn.x}
+                y2={selectedVertex.handleIn.y}
+                stroke={activeColor}
+                strokeWidth={1}
+                strokeDasharray="4 2"
+                pointerEvents="none"
+              />
+              <circle
+                cx={selectedVertex.handleIn.x}
+                cy={selectedVertex.handleIn.y}
+                r={5}
+                fill="white"
+                stroke={activeColor}
+                strokeWidth={1.5}
+                style={{ cursor: 'move' }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  onHandleMouseDown?.(selectedVertex.id, 'in', e);
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </>
+          )}
+          {selectedVertex.handleOut && (
+            <>
+              <line
+                x1={selectedVertex.x}
+                y1={selectedVertex.y}
+                x2={selectedVertex.handleOut.x}
+                y2={selectedVertex.handleOut.y}
+                stroke={activeColor}
+                strokeWidth={1}
+                strokeDasharray="4 2"
+                pointerEvents="none"
+              />
+              <circle
+                cx={selectedVertex.handleOut.x}
+                cy={selectedVertex.handleOut.y}
+                r={5}
+                fill="white"
+                stroke={activeColor}
+                strokeWidth={1.5}
+                style={{ cursor: 'move' }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  onHandleMouseDown?.(selectedVertex.id, 'out', e);
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </>
+          )}
+        </g>
+      )}
     </g>
   );
 };

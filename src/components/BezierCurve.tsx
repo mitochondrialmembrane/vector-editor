@@ -25,13 +25,18 @@ interface BezierCurveProps {
   vertices: Vertex[];
   curves: CurveSegment[];
   isActive?: boolean;
+  isClosed?: boolean;
   selectedVertexId?: string | null;
   onClick?: (id: string) => void;
+  onCurveMouseDown?: (id: string, e: React.MouseEvent) => void;
   onVertexMouseDown?: (vertexId: string, e: React.MouseEvent) => void;
+  onVertexClick?: (vertexId: string) => void;
   onHandleMouseDown?: (vertexId: string, handle: 'in' | 'out', e: React.MouseEvent) => void;
-  activeColor?: string;
-  inactiveColor?: string;
+  strokeColor?: string;
   strokeWidth?: number;
+  fillColor?: string;
+  opacity?: number;
+  blendMode?: string;
 }
 
 const BezierCurve: React.FC<BezierCurveProps> = ({
@@ -39,13 +44,18 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
   vertices,
   curves,
   isActive = false,
+  isClosed = false,
   selectedVertexId = null,
   onClick,
+  onCurveMouseDown,
   onVertexMouseDown,
+  onVertexClick,
   onHandleMouseDown,
-  activeColor = 'royalblue',
-  inactiveColor = '#ccc',
+  strokeColor = '#333333',
   strokeWidth = 3,
+  fillColor = 'transparent',
+  opacity = 1,
+  blendMode = 'normal',
 }) => {
   if (curves.length === 0) return null;
 
@@ -88,9 +98,18 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
     d += ` C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${end.x} ${end.y}`;
   }
 
+  if (isClosed) {
+    d += ' Z';
+  }
+
   const handleCurveClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onClick?.(id);
+  };
+
+  const handleCurveMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onCurveMouseDown?.(id, e);
   };
 
   // Find the selected vertex object for rendering its handle lines
@@ -107,18 +126,33 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
         strokeWidth={strokeWidth + 12}
         fill="none"
         pointerEvents="auto"
+        onMouseDown={handleCurveMouseDown}
       />
       {/* Visible path */}
       <path
         d={d}
-        stroke={isActive ? activeColor : inactiveColor}
+        stroke={strokeColor}
         strokeWidth={strokeWidth}
-        fill="none"
+        fill={fillColor}
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ transition: 'stroke 0.15s ease' }}
         pointerEvents="none"
+        opacity={opacity}
+        style={{ mixBlendMode: blendMode as any }}
       />
+      {/* Active highlight */}
+      {isActive && (
+        <path
+          d={d}
+          stroke="royalblue"
+          strokeWidth={strokeWidth + 4}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pointerEvents="none"
+          opacity={0.3}
+        />
+      )}
 
       {/* Vertex handles — only when active */}
       {isActive &&
@@ -130,6 +164,7 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
             y={v.y}
             isActive={selectedVertexId === v.id}
             onMouseDown={onVertexMouseDown ?? (() => { })}
+            onClick={onVertexClick}
           />
         ))}
 
@@ -143,7 +178,7 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
                 y1={selectedVertex.y}
                 x2={selectedVertex.handleIn.x}
                 y2={selectedVertex.handleIn.y}
-                stroke={activeColor}
+                stroke="royalblue"
                 strokeWidth={1}
                 strokeDasharray="4 2"
                 pointerEvents="none"
@@ -153,7 +188,7 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
                 cy={selectedVertex.handleIn.y}
                 r={5}
                 fill="white"
-                stroke={activeColor}
+                stroke="royalblue"
                 strokeWidth={1.5}
                 style={{ cursor: 'move' }}
                 onMouseDown={(e) => {
@@ -171,7 +206,7 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
                 y1={selectedVertex.y}
                 x2={selectedVertex.handleOut.x}
                 y2={selectedVertex.handleOut.y}
-                stroke={activeColor}
+                stroke="royalblue"
                 strokeWidth={1}
                 strokeDasharray="4 2"
                 pointerEvents="none"
@@ -181,7 +216,7 @@ const BezierCurve: React.FC<BezierCurveProps> = ({
                 cy={selectedVertex.handleOut.y}
                 r={5}
                 fill="white"
-                stroke={activeColor}
+                stroke="royalblue"
                 strokeWidth={1.5}
                 style={{ cursor: 'move' }}
                 onMouseDown={(e) => {

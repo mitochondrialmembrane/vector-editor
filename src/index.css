@@ -41,3 +41,51 @@ html, body, #root {
   background-color: var(--bg-primary);
   color: var(--text-primary);
 }
+
+/* Bauhaus UI Styles */
+.color-palette {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 2px solid var(--border-subtle);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.color-swatch.active {
+  border-color: #fff;
+}
+
+.boolean-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.boolean-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.boolean-action-btn:hover {
+  background-color: var(--bg-hover);
+}

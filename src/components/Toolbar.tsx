@@ -1,4 +1,4 @@
-import { MousePointer2, Minus, Square, Circle, Hexagon } from 'lucide-react';
+import { MousePointer2, Minus, Square, Circle } from 'lucide-react';
 import { useActiveTool } from '../context/ActiveToolContext';
 import type { ToolName } from '../tools/types';
 
@@ -14,7 +14,6 @@ const TOOLS: ToolDef[] = [
   { id: 'line', label: 'Line', icon: <Minus size={16} />, shortcut: 'L' },
   { id: 'rect', label: 'Rectangle', icon: <Square size={16} />, shortcut: 'R' },
   { id: 'ellipse', label: 'Ellipse', icon: <Circle size={16} />, shortcut: 'E' },
-  { id: 'polygon', label: 'Polygon', icon: <Hexagon size={16} />, shortcut: 'P' },
 ];
 
 export default function Toolbar() {

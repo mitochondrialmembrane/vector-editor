@@ -149,6 +149,34 @@
   color: var(--text-muted);
 }
 
+/* ── Boolean operations ──────────────────────────────────── */
+.boolean-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.boolean-ops button {
+  padding: 8px 12px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: background-color 0.12s;
+}
+
+.boolean-ops button:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+}
+
+.boolean-ops button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Properties panel ────────────────────────────────────── */
 .properties-panel {
   display: flex;

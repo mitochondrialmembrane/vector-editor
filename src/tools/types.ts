@@ -1,1 +1,1 @@
-export type ToolName = 'select' | 'line' | 'rect' | 'ellipse' | 'polygon';
+export type ToolName = "select" | "line" | "rect" | "ellipse";

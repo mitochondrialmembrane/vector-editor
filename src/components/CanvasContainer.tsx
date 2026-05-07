@@ -3,27 +3,14 @@ import paper from 'paper';
 import { useActiveTool } from '../context/ActiveToolContext';
 import { useDocument } from '../context/DocumentContext';
 
-type ItemType = 'Rectangle' | 'Ellipse' | 'Path';
-
-type ItemData = {
-  id: number;
-  type: ItemType;
-  props: Record<string, any>;
-};
-
 export default function CanvasContainer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { activeToolName } = useActiveTool();
-  const { selectedItemId, selectedProps, setSelectedItemId, setSelectedProps } = useDocument();
-
-  const [items, setItems] = useState<ItemData[]>([
-  ]);
-  const [nextId, setNextId] = useState(2);
+  const { selectedItemIds, selectedProps, setSelectedItemIds, setSelectedProps, items, setItems } = useDocument();
   const [drawingId, setDrawingId] = useState<number | null>(null);
   const [dragStart, setDragStart] = useState<paper.Point | null>(null);
   const [cursor, setCursor] = useState('default');
-  const panStart = useRef<paper.Point | null>(null);
   const panStartScreen = useRef<paper.Point | null>(null);
   const selectedDragItem = useRef<paper.Item | null>(null);
   const selectedDragItemId = useRef<number | null>(null);
@@ -41,16 +28,23 @@ export default function CanvasContainer() {
 
   const applyItemStyle = (item: paper.Item, props: Record<string, any>) => {
     if ('strokeColor' in props) {
-      item.strokeColor = new paper.Color(props.strokeColor);
+      item.strokeColor = props.strokeColor === 'none'
+        ? null as unknown as paper.Color
+        : new paper.Color(props.strokeColor);
     }
     if ('strokeWidth' in props) {
       item.strokeWidth = props.strokeWidth;
     }
     if ('fillColor' in props) {
-      item.fillColor = props.fillColor === 'none' ? null as unknown as paper.Color : new paper.Color(props.fillColor);
+      item.fillColor = props.fillColor === 'none'
+        ? null as unknown as paper.Color
+        : new paper.Color(props.fillColor);
     }
     if ('opacity' in props) {
       item.opacity = props.opacity;
+    }
+    if ('blendMode' in props) {
+      item.blendMode = props.blendMode;
     }
   };
 
@@ -120,7 +114,7 @@ export default function CanvasContainer() {
       if (paperItem) {
         paperItem.data = { id: item.id };
         applyItemStyle(paperItem, item.props);
-        paperItem.selected = item.id === selectedItemId;
+        paperItem.selected = selectedItemIds.includes(item.id);
       }
     });
 
@@ -210,8 +204,10 @@ export default function CanvasContainer() {
   useEffect(() => {
     if (activeToolName === 'select') {
       setCursor('pointer');
-    } else {
+    } else if (activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line') {
       setCursor('crosshair');
+    } else {
+      setCursor('default');
     }
   }, [activeToolName]);
 
@@ -219,13 +215,27 @@ export default function CanvasContainer() {
     const point = projectPoint(event);
 
     if (activeToolName === 'select') {
-      const hit = paper.project.hitTest(point, { fill: true, stroke: true, tolerance: 5 });
+      const hit = paper.project.hitTest(point, { fill: true, stroke: true, tolerance: 10 });
       if (hit?.item) {
         selectedDragItem.current = hit.item;
         const itemId = Number(hit.item.data?.id ?? null);
         if (!Number.isNaN(itemId)) {
           selectedDragItemId.current = itemId;
-          setSelectedItemId(itemId);
+          const isShiftPressed = event.shiftKey;
+          if (isShiftPressed) {
+            // Add to selection or remove if already selected
+            setSelectedItemIds(prev => {
+              const isAlreadySelected = prev.includes(itemId);
+              if (isAlreadySelected) {
+                return prev.filter(id => id !== itemId);
+              } else {
+                return [...prev, itemId];
+              }
+            });
+          } else {
+            // Single selection
+            setSelectedItemIds([itemId]);
+          }
           setSelectedProps({
             fillColor: hit.item.fillColor?.toCSS(true) ?? 'none',
             strokeColor: hit.item.strokeColor?.toCSS(true) ?? 'none',
@@ -240,20 +250,27 @@ export default function CanvasContainer() {
       }
       selectedDragItem.current = null;
       selectedDragItemId.current = null;
-      panStart.current = point;
+      if (!event.shiftKey) {
+        setSelectedItemIds([]);
+        setSelectedProps(null);
+      }
       panStartScreen.current = new paper.Point(event.clientX, event.clientY);
-      setSelectedItemId(null);
-      setSelectedProps(null);
       setCursor('grabbing');
       return;
     }
 
-    if (activeToolName === 'rect') {
+    if (activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line') {
       const id = nextId;
       const newItem: ItemData = {
         id,
-        type: 'Rectangle',
-        props: {
+        type: activeToolName === 'ellipse' ? 'Ellipse' : activeToolName === 'line' ? 'Path' : 'Rectangle',
+        props: activeToolName === 'line' ? {
+          segments: [[point.x, point.y], [point.x + 1, point.y + 1]],
+          fillColor: 'none',
+          strokeColor: '#111111',
+          strokeWidth: 3,
+          opacity: 1,
+        } : {
           from: [point.x, point.y],
           to: [point.x + 1, point.y + 1],
           fillColor: 'none',
@@ -276,23 +293,37 @@ export default function CanvasContainer() {
       if (selectedDragItemId.current !== null && dragStart) {
         const delta = point.subtract(dragStart);
         setItems(prev => prev.map(item => {
-          if (item.id !== selectedDragItemId.current) return item;
+          if (!selectedItemIds.includes(item.id)) return item;
           return moveItemProps(item, delta);
         }));
         setDragStart(point);
         return;
       }
 
-      if (panStart.current) {
-        const screenDelta = new paper.Point(event.clientX, event.clientY).subtract(panStartScreen.current!);
-        paper.view.center = paper.view.center.subtract(paper.view.viewToProject(screenDelta));
+      if (panStartScreen.current) {
+        const screenDelta = new paper.Point(event.clientX, event.clientY).subtract(panStartScreen.current);
+        const projectOrigin = paper.view.viewToProject(new paper.Point(0, 0));
+        const projectOffset = paper.view.viewToProject(screenDelta).subtract(projectOrigin);
+        paper.view.center = paper.view.center.subtract(projectOffset);
         panStartScreen.current = new paper.Point(event.clientX, event.clientY);
         paper.view.update();
         return;
       }
     }
 
-    if (activeToolName === 'rect' && drawingId !== null && dragStart) {
+    if ((activeToolName === 'line') && drawingId !== null && dragStart) {
+      setItems(prev => prev.map(item => {
+        if (item.id !== drawingId) return item;
+        return {
+          ...item,
+          props: {
+            ...item.props,
+            segments: [item.props.segments[0], [point.x + 1, point.y + 1]],
+          },
+        };
+      }));
+    }
+    if ((activeToolName === 'rect' || activeToolName === 'ellipse') && drawingId !== null && dragStart) {
       setItems(prev => prev.map(item => {
         if (item.id !== drawingId) return item;
         return {
@@ -304,15 +335,26 @@ export default function CanvasContainer() {
         };
       }));
     }
+
   };
 
   const handleMouseUp = () => {
     if (drawingId !== null) {
+      const createdItem = items.find(item => item.id === drawingId);
+      setSelectedItemId(drawingId);
+      if (createdItem) {
+        setSelectedProps({
+          fillColor: createdItem.props.fillColor ?? 'none',
+          strokeColor: createdItem.props.strokeColor ?? 'none',
+          strokeWidth: typeof createdItem.props.strokeWidth === 'number' ? createdItem.props.strokeWidth : 1,
+          opacity: typeof createdItem.props.opacity === 'number' ? createdItem.props.opacity : 1,
+          blendMode: createdItem.props.blendMode || 'normal',
+        });
+      }
       setDrawingId(null);
       setDragStart(null);
     }
-    if (panStart.current) {
-      panStart.current = null;
+    if (panStartScreen.current) {
       panStartScreen.current = null;
     }
     if (selectedDragItem.current) {
@@ -322,7 +364,7 @@ export default function CanvasContainer() {
     }
     if (activeToolName === 'select') {
       setCursor('pointer');
-    } else if (activeToolName === 'rect') {
+    } else if (activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line') {
       setCursor('crosshair');
     } else {
       setCursor('default');
@@ -330,14 +372,13 @@ export default function CanvasContainer() {
   };
 
   const handleMouseLeave = () => {
-    panStart.current = null;
     panStartScreen.current = null;
     selectedDragItem.current = null;
     selectedDragItemId.current = null;
     setDragStart(null);
     if (activeToolName === 'select') {
       setCursor('pointer');
-    } else if (activeToolName === 'rect') {
+    } else if (activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line') {
       setCursor('crosshair');
     } else {
       setCursor('default');

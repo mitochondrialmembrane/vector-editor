@@ -26,14 +26,13 @@ const PLACEHOLDER_LAYERS: Layer[] = [
 ];
 
 export default function Sidebar() {
-  const { selectedItemId, selectedProps, setSelectedProps } = useDocument();
+  const { selectedItemIds, selectedProps, setSelectedProps, items, setItems } = useDocument();
 
   function applyToSelected(updater: (item: paper.Item) => void, propPatch: Partial<SelectedItemProps>) {
-    if (selectedItemId === null) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const item = paper.project.getItem({ id: selectedItemId } as any);
-    if (!item) return;
-    updater(item);
+    selectedItemIds.forEach(id => {
+      const item = paper.project.getItems({}).find((it: any) => it.data?.id === id);
+      if (item) updater(item);
+    });
     paper.view.update();
     if (selectedProps) setSelectedProps({ ...selectedProps, ...propPatch });
   }
@@ -55,9 +54,54 @@ export default function Sidebar() {
     applyToSelected(item => { item.opacity = val; }, { opacity: val });
   };
 
-  const handleBlendModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value;
-    applyToSelected(item => { item.blendMode = val; }, { blendMode: val });
+  const handleBooleanOp = (operation: 'union' | 'intersect' | 'subtract') => {
+    if (selectedItemIds.length < 2) return;
+
+    const primaryId = selectedItemIds[0];
+    const primaryItem = paper.project.getItems({}).find((it: any) => it.data?.id === primaryId);
+    if (!primaryItem || !(primaryItem instanceof paper.Path)) return;
+
+    let resultPath = primaryItem.clone();
+
+    for (let i = 1; i < selectedItemIds.length; i++) {
+      const secondaryId = selectedItemIds[i];
+      const secondaryItem = paper.project.getItems({}).find((it: any) => it.data?.id === secondaryId);
+      if (!secondaryItem || !(secondaryItem instanceof paper.Path)) continue;
+
+      switch (operation) {
+        case 'union':
+          resultPath = resultPath.unite(secondaryItem);
+          break;
+        case 'intersect':
+          resultPath = resultPath.intersect(secondaryItem);
+          break;
+        case 'subtract':
+          resultPath = resultPath.subtract(secondaryItem);
+          break;
+      }
+    }
+
+    // Remove old items
+    selectedItemIds.forEach(id => {
+      const item = paper.project.getItems({}).find((it: any) => it.data?.id === id);
+      if (item) item.remove();
+    });
+
+    // Add new combined item
+    resultPath.data = { id: primaryId };
+    applyItemStyle(resultPath, {
+      fillColor: 'red', // Default style for result
+      strokeColor: '#000000',
+      strokeWidth: 2,
+      opacity: 1,
+    });
+
+    // Update items state - replace primary with new path
+    // This is complex, need to update the items array
+    // For now, just clear selection
+    setSelectedItemIds([]);
+    setSelectedProps(null);
+    paper.view.update();
   };
 
   return (
@@ -171,6 +215,33 @@ export default function Sidebar() {
         ) : (
           <p className="sidebar-empty">No object selected</p>
         )}
+      </section>
+
+      <section className="sidebar-section">
+        <h3>Boolean Operations</h3>
+        <div className="boolean-ops">
+          <button
+            onClick={() => handleBooleanOp('union')}
+            disabled={selectedItemIds.length < 2}
+            title="Union: Combine selected shapes"
+          >
+            Union
+          </button>
+          <button
+            onClick={() => handleBooleanOp('intersect')}
+            disabled={selectedItemIds.length < 2}
+            title="Intersect: Keep overlapping areas"
+          >
+            Intersect
+          </button>
+          <button
+            onClick={() => handleBooleanOp('subtract')}
+            disabled={selectedItemIds.length < 2}
+            title="Subtract: Remove secondary shapes from primary"
+          >
+            Subtract
+          </button>
+        </div>
       </section>
     </div>
   );

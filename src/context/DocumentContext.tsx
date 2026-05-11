@@ -8,21 +8,25 @@ export interface SelectedItemProps {
   blendMode: string;
 }
 
-type ItemType = 'Rectangle' | 'Ellipse' | 'Path';
-
 export type ItemData = {
   id: number;
-  type: ItemType;
-  props: Record<string, any>;
+  pathData: string;
+  fillColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
+  opacity?: number;
+  blendMode?: string;
 };
 
 interface DocumentContextValue {
   selectedItemIds: number[];
-  setSelectedItemIds: (ids: number[]) => void;
+  setSelectedItemIds: React.Dispatch<React.SetStateAction<number[]>>;
   selectedProps: SelectedItemProps | null;
   setSelectedProps: (props: SelectedItemProps | null) => void;
   items: ItemData[];
   setItems: React.Dispatch<React.SetStateAction<ItemData[]>>;
+  nextId: number;
+  setNextId: React.Dispatch<React.SetStateAction<number>>;
 }
 
 const DocumentContext = createContext<DocumentContextValue | null>(null);
@@ -31,9 +35,10 @@ export function DocumentProvider({ children }: { children: React.ReactNode }) {
   const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
   const [selectedProps, setSelectedProps] = useState<SelectedItemProps | null>(null);
   const [items, setItems] = useState<ItemData[]>([]);
+  const [nextId, setNextId] = useState(1);
 
   return (
-    <DocumentContext.Provider value={{ selectedItemIds, setSelectedItemIds, selectedProps, setSelectedProps, items, setItems }}>
+    <DocumentContext.Provider value={{ selectedItemIds, setSelectedItemIds, selectedProps, setSelectedProps, items, setItems, nextId, setNextId }}>
       {children}
     </DocumentContext.Provider>
   );

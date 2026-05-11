@@ -1,18 +1,56 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import paper from 'paper';
 import { useActiveTool } from '../context/ActiveToolContext';
-import { useDocument } from '../context/DocumentContext';
+import { useDocument, type ItemData } from '../context/DocumentContext';
+
+const isCompoundPathData = (pathData: string) => (pathData.match(/[Mm]/g) || []).length > 1;
+
+const createPathItem = (pathData: string, insert = true): paper.PathItem => {
+  if (isCompoundPathData(pathData)) {
+    return new paper.CompoundPath({ pathData, insert });
+  }
+  return new paper.Path({ pathData, insert });
+};
+
+const shapePathData = (tool: 'rect' | 'ellipse' | 'line', from: paper.Point, to: paper.Point): string => {
+  let path: paper.Path;
+  if (tool === 'rect') {
+    path = new paper.Path.Rectangle({ from, to, insert: false });
+  } else if (tool === 'ellipse') {
+    path = new paper.Path.Ellipse({ from, to, insert: false });
+  } else {
+    path = new paper.Path({ segments: [from, to], insert: false });
+  }
+  return path.pathData;
+};
+
+const findTopPaperItem = (item: paper.Item | null): paper.Item | null => {
+  let cur: paper.Item | null = item;
+  while (cur) {
+    if (typeof cur.data?.id === 'number') return cur;
+    cur = cur.parent;
+  }
+  return null;
+};
 
 export default function CanvasContainer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { activeToolName } = useActiveTool();
-  const { selectedItemIds, selectedProps, setSelectedItemIds, setSelectedProps, items, setItems } = useDocument();
+  const {
+    selectedItemIds,
+    selectedProps,
+    setSelectedItemIds,
+    setSelectedProps,
+    items,
+    setItems,
+    nextId,
+    setNextId,
+  } = useDocument();
   const [drawingId, setDrawingId] = useState<number | null>(null);
   const [dragStart, setDragStart] = useState<paper.Point | null>(null);
   const [cursor, setCursor] = useState('default');
   const panStartScreen = useRef<paper.Point | null>(null);
-  const selectedDragItem = useRef<paper.Item | null>(null);
   const selectedDragItemId = useRef<number | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
 
@@ -26,56 +64,43 @@ export default function CanvasContainer() {
     setCanvasSize({ width, height });
   };
 
-  const applyItemStyle = (item: paper.Item, props: Record<string, any>) => {
-    if ('strokeColor' in props) {
-      item.strokeColor = props.strokeColor === 'none'
+  const applyItemStyle = (paperItem: paper.Item, data: ItemData) => {
+    if (data.strokeColor !== undefined) {
+      paperItem.strokeColor = data.strokeColor === 'none'
         ? null as unknown as paper.Color
-        : new paper.Color(props.strokeColor);
+        : new paper.Color(data.strokeColor);
     }
-    if ('strokeWidth' in props) {
-      item.strokeWidth = props.strokeWidth;
+    if (data.strokeWidth !== undefined) {
+      paperItem.strokeWidth = data.strokeWidth;
     }
-    if ('fillColor' in props) {
-      item.fillColor = props.fillColor === 'none'
+    if (data.fillColor !== undefined) {
+      paperItem.fillColor = data.fillColor === 'none'
         ? null as unknown as paper.Color
-        : new paper.Color(props.fillColor);
+        : new paper.Color(data.fillColor);
     }
-    if ('opacity' in props) {
-      item.opacity = props.opacity;
+    if (data.opacity !== undefined) {
+      paperItem.opacity = data.opacity;
     }
-    if ('blendMode' in props) {
-      item.blendMode = props.blendMode;
+    if (data.blendMode !== undefined) {
+      paperItem.blendMode = data.blendMode;
     }
   };
 
-  const moveItemProps = (item: ItemData, delta: paper.Point): ItemData => {
-    const dx = delta.x;
-    const dy = delta.y;
-
-    if (item.type === 'Rectangle' || item.type === 'Ellipse') {
-      const from = new paper.Point(item.props.from);
-      const to = new paper.Point(item.props.to);
-      return {
-        ...item,
-        props: {
-          ...item.props,
-          from: [from.x + dx, from.y + dy],
-          to: [to.x + dx, to.y + dy],
-        },
-      };
+  const translatePathData = (pathData: string, delta: paper.Point): string => {
+    const tmp = createPathItem(pathData, false);
+    const shiftPath = (path: paper.Path) => {
+      path.segments.forEach(seg => {
+        seg.point = new paper.Point(seg.point.x + delta.x, seg.point.y + delta.y);
+      });
+    };
+    if (tmp instanceof paper.CompoundPath) {
+      tmp.children.forEach(child => {
+        if (child instanceof paper.Path) shiftPath(child);
+      });
+    } else if (tmp instanceof paper.Path) {
+      shiftPath(tmp);
     }
-
-    if (item.type === 'Path' && Array.isArray(item.props.segments)) {
-      return {
-        ...item,
-        props: {
-          ...item.props,
-          segments: item.props.segments.map((segment: any) => [segment[0] + dx, segment[1] + dy]),
-        },
-      };
-    }
-
-    return item;
+    return tmp.pathData;
   };
 
   const drawItems = () => {
@@ -84,37 +109,15 @@ export default function CanvasContainer() {
     layer.removeChildren();
 
     items.forEach(item => {
-      let paperItem: paper.Item | null = null;
-      switch (item.type) {
-        case 'Rectangle': {
-          const from = new paper.Point(item.props.from);
-          const to = new paper.Point(item.props.to);
-          paperItem = new paper.Path.Rectangle(new paper.Rectangle(from, to));
-          break;
-        }
-        case 'Ellipse': {
-          const from = new paper.Point(item.props.from);
-          const to = new paper.Point(item.props.to);
-          paperItem = new paper.Path.Ellipse(new paper.Rectangle(from, to));
-          break;
-        }
-        case 'Path': {
-          if (Array.isArray(item.props.segments)) {
-            const path = new paper.Path();
-            item.props.segments.forEach((segment: any) => {
-              path.add(new paper.Point(segment));
-            });
-            paperItem = path;
-          }
-          break;
-        }
-        default:
-          break;
-      }
-      if (paperItem) {
-        paperItem.data = { id: item.id };
-        applyItemStyle(paperItem, item.props);
-        paperItem.selected = selectedItemIds.includes(item.id);
+      if (!item.pathData) return;
+      const paperItem = createPathItem(item.pathData);
+      paperItem.data = { id: item.id };
+      applyItemStyle(paperItem, item);
+      const isSelected = selectedItemIds.includes(item.id);
+      paperItem.selected = isSelected;
+      if (isSelected) {
+        const isPrimary = selectedItemIds[0] === item.id;
+        paperItem.selectedColor = isPrimary ? null as unknown as paper.Color : new paper.Color('#9ca3af');
       }
     });
 
@@ -157,23 +160,17 @@ export default function CanvasContainer() {
       drawItems();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, selectedItemId]);
+  }, [items, selectedItemIds]);
 
   useEffect(() => {
-    if (selectedItemId !== null && selectedProps) {
+    if (selectedItemIds.length > 0 && selectedProps) {
       setItems(prev => prev.map(item => {
-        if (item.id !== selectedItemId) return item;
-        return {
-          ...item,
-          props: {
-            ...item.props,
-            ...selectedProps,
-          },
-        };
+        if (item.id !== selectedItemIds[0]) return item;
+        return { ...item, ...selectedProps };
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedItemId, selectedProps]);
+  }, [selectedItemIds, selectedProps]);
 
   useEffect(() => {
     updateCanvasSize();
@@ -184,16 +181,16 @@ export default function CanvasContainer() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Backspace' || event.key === 'Delete') {
-        if (selectedItemId !== null) {
-          setItems(prev => prev.filter(item => item.id !== selectedItemId));
-          setSelectedItemId(null);
+        if (selectedItemIds.length > 0) {
+          setItems(prev => prev.filter(item => !selectedItemIds.includes(item.id)));
+          setSelectedItemIds([]);
           setSelectedProps(null);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedItemId, setSelectedItemId, setSelectedProps]);
+  }, [selectedItemIds, setSelectedItemIds, setSelectedProps]);
 
   const projectPoint = (event: MouseEvent<HTMLCanvasElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -216,39 +213,39 @@ export default function CanvasContainer() {
 
     if (activeToolName === 'select') {
       const hit = paper.project.hitTest(point, { fill: true, stroke: true, tolerance: 10 });
-      if (hit?.item) {
-        selectedDragItem.current = hit.item;
-        const itemId = Number(hit.item.data?.id ?? null);
-        if (!Number.isNaN(itemId)) {
-          selectedDragItemId.current = itemId;
-          const isShiftPressed = event.shiftKey;
-          if (isShiftPressed) {
-            // Add to selection or remove if already selected
-            setSelectedItemIds(prev => {
-              const isAlreadySelected = prev.includes(itemId);
-              if (isAlreadySelected) {
-                return prev.filter(id => id !== itemId);
-              } else {
-                return [...prev, itemId];
-              }
-            });
-          } else {
-            // Single selection
-            setSelectedItemIds([itemId]);
-          }
-          setSelectedProps({
-            fillColor: hit.item.fillColor?.toCSS(true) ?? 'none',
-            strokeColor: hit.item.strokeColor?.toCSS(true) ?? 'none',
-            strokeWidth: typeof hit.item.strokeWidth === 'number' ? hit.item.strokeWidth : 1,
-            opacity: typeof hit.item.opacity === 'number' ? hit.item.opacity : 1,
-            blendMode: hit.item.blendMode || 'normal',
-          });
-          setDragStart(point);
-          setCursor('grabbing');
-          return;
+      const topItem = findTopPaperItem(hit?.item ?? null);
+      if (topItem) {
+        const itemId = topItem.data.id as number;
+        selectedDragItemId.current = itemId;
+        const isShiftPressed = event.shiftKey;
+        let nextIds: number[];
+        if (isShiftPressed) {
+          nextIds = selectedItemIds.includes(itemId)
+            ? selectedItemIds.filter(id => id !== itemId)
+            : [...selectedItemIds, itemId];
+        } else {
+          nextIds = [itemId];
         }
+        setSelectedItemIds(nextIds);
+        const newPrimaryId = nextIds[0];
+        const newPrimary = newPrimaryId !== undefined
+          ? items.find(it => it.id === newPrimaryId)
+          : undefined;
+        if (newPrimary) {
+          setSelectedProps({
+            fillColor: newPrimary.fillColor ?? 'none',
+            strokeColor: newPrimary.strokeColor ?? 'none',
+            strokeWidth: newPrimary.strokeWidth ?? 1,
+            opacity: newPrimary.opacity ?? 1,
+            blendMode: newPrimary.blendMode ?? 'normal',
+          });
+        } else {
+          setSelectedProps(null);
+        }
+        setDragStart(point);
+        setCursor('grabbing');
+        return;
       }
-      selectedDragItem.current = null;
       selectedDragItemId.current = null;
       if (!event.shiftKey) {
         setSelectedItemIds([]);
@@ -261,23 +258,14 @@ export default function CanvasContainer() {
 
     if (activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line') {
       const id = nextId;
+      const initialTo = point.add(new paper.Point(1, 1));
       const newItem: ItemData = {
         id,
-        type: activeToolName === 'ellipse' ? 'Ellipse' : activeToolName === 'line' ? 'Path' : 'Rectangle',
-        props: activeToolName === 'line' ? {
-          segments: [[point.x, point.y], [point.x + 1, point.y + 1]],
-          fillColor: 'none',
-          strokeColor: '#111111',
-          strokeWidth: 3,
-          opacity: 1,
-        } : {
-          from: [point.x, point.y],
-          to: [point.x + 1, point.y + 1],
-          fillColor: 'none',
-          strokeColor: '#111111',
-          strokeWidth: 3,
-          opacity: 1,
-        },
+        pathData: shapePathData(activeToolName, point, initialTo),
+        fillColor: 'none',
+        strokeColor: '#111111',
+        strokeWidth: 3,
+        opacity: 1,
       };
       setItems(prev => [...prev, newItem]);
       setNextId(id + 1);
@@ -294,7 +282,7 @@ export default function CanvasContainer() {
         const delta = point.subtract(dragStart);
         setItems(prev => prev.map(item => {
           if (!selectedItemIds.includes(item.id)) return item;
-          return moveItemProps(item, delta);
+          return { ...item, pathData: translatePathData(item.pathData, delta) };
         }));
         setDragStart(point);
         return;
@@ -311,44 +299,28 @@ export default function CanvasContainer() {
       }
     }
 
-    if ((activeToolName === 'line') && drawingId !== null && dragStart) {
+    if ((activeToolName === 'rect' || activeToolName === 'ellipse' || activeToolName === 'line')
+        && drawingId !== null && dragStart) {
+      const tool = activeToolName;
+      const newPathData = shapePathData(tool, dragStart, point);
       setItems(prev => prev.map(item => {
         if (item.id !== drawingId) return item;
-        return {
-          ...item,
-          props: {
-            ...item.props,
-            segments: [item.props.segments[0], [point.x + 1, point.y + 1]],
-          },
-        };
+        return { ...item, pathData: newPathData };
       }));
     }
-    if ((activeToolName === 'rect' || activeToolName === 'ellipse') && drawingId !== null && dragStart) {
-      setItems(prev => prev.map(item => {
-        if (item.id !== drawingId) return item;
-        return {
-          ...item,
-          props: {
-            ...item.props,
-            to: [point.x, point.y],
-          },
-        };
-      }));
-    }
-
   };
 
   const handleMouseUp = () => {
     if (drawingId !== null) {
       const createdItem = items.find(item => item.id === drawingId);
-      setSelectedItemId(drawingId);
+      setSelectedItemIds([drawingId]);
       if (createdItem) {
         setSelectedProps({
-          fillColor: createdItem.props.fillColor ?? 'none',
-          strokeColor: createdItem.props.strokeColor ?? 'none',
-          strokeWidth: typeof createdItem.props.strokeWidth === 'number' ? createdItem.props.strokeWidth : 1,
-          opacity: typeof createdItem.props.opacity === 'number' ? createdItem.props.opacity : 1,
-          blendMode: createdItem.props.blendMode || 'normal',
+          fillColor: createdItem.fillColor ?? 'none',
+          strokeColor: createdItem.strokeColor ?? 'none',
+          strokeWidth: typeof createdItem.strokeWidth === 'number' ? createdItem.strokeWidth : 1,
+          opacity: typeof createdItem.opacity === 'number' ? createdItem.opacity : 1,
+          blendMode: createdItem.blendMode || 'normal',
         });
       }
       setDrawingId(null);
@@ -357,8 +329,7 @@ export default function CanvasContainer() {
     if (panStartScreen.current) {
       panStartScreen.current = null;
     }
-    if (selectedDragItem.current) {
-      selectedDragItem.current = null;
+    if (selectedDragItemId.current !== null) {
       selectedDragItemId.current = null;
       setDragStart(null);
     }
@@ -373,7 +344,6 @@ export default function CanvasContainer() {
 
   const handleMouseLeave = () => {
     panStartScreen.current = null;
-    selectedDragItem.current = null;
     selectedDragItemId.current = null;
     setDragStart(null);
     if (activeToolName === 'select') {

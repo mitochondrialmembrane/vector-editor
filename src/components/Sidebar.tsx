@@ -1,7 +1,7 @@
 import React from 'react';
 import paper from 'paper';
 import { Eye, Lock, Merge, Component, MinusCircle } from 'lucide-react';
-import { useDocument } from '../context/DocumentContext';
+import { useDocument, type ItemData } from '../context/DocumentContext';
 import type { SelectedItemProps } from '../context/DocumentContext';
 
 const BAUHAUS_PALETTE = [
@@ -26,13 +26,22 @@ const PLACEHOLDER_LAYERS: Layer[] = [
 ];
 
 export default function Sidebar() {
-  const { selectedItemIds, selectedProps, setSelectedProps, items, setItems } = useDocument();
+  const {
+    selectedItemIds,
+    setSelectedItemIds,
+    selectedProps,
+    setSelectedProps,
+    items,
+    setItems,
+    nextId,
+    setNextId,
+  } = useDocument();
 
-  function applyToSelected(updater: (item: paper.Item) => void, propPatch: Partial<SelectedItemProps>) {
-    selectedItemIds.forEach(id => {
-      const item = paper.project.getItems({}).find((it: any) => it.data?.id === id);
-      if (item) updater(item);
-    });
+  function applyToPrimary(updater: (item: paper.Item) => void, propPatch: Partial<SelectedItemProps>) {
+    const primaryId = selectedItemIds[0];
+    if (primaryId === undefined) return;
+    const item = paper.project.getItem({ data: { id: primaryId } });
+    if (item) updater(item);
     paper.view.update();
     if (selectedProps) setSelectedProps({ ...selectedProps, ...propPatch });
   }
@@ -41,68 +50,77 @@ export default function Sidebar() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const color = hex === 'none' ? null : new paper.Color(hex);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    applyToSelected(item => { (item as any)[key] = color; }, { [key]: hex });
+    applyToPrimary(item => { (item as any)[key] = color; }, { [key]: hex });
   };
 
   const handleWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10);
-    applyToSelected(item => { item.strokeWidth = val; }, { strokeWidth: val });
+    applyToPrimary(item => { item.strokeWidth = val; }, { strokeWidth: val });
   };
 
   const handleOpacityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
-    applyToSelected(item => { item.opacity = val; }, { opacity: val });
+    applyToPrimary(item => { item.opacity = val; }, { opacity: val });
+  };
+
+  const handleBlendModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const blendMode = e.target.value;
+    applyToPrimary(item => { item.blendMode = blendMode; }, { blendMode });
   };
 
   const handleBooleanOp = (operation: 'union' | 'intersect' | 'subtract') => {
     if (selectedItemIds.length < 2) return;
 
-    const primaryId = selectedItemIds[0];
-    const primaryItem = paper.project.getItems({}).find((it: any) => it.data?.id === primaryId);
-    if (!primaryItem || !(primaryItem instanceof paper.Path)) return;
+    const paperItems = selectedItemIds
+      .map(id => paper.project.getItem({ data: { id } }) as paper.PathItem | null)
+      .filter((p): p is paper.PathItem => p !== null);
+    if (paperItems.length < 2) return;
 
-    let resultPath = primaryItem.clone();
-
-    for (let i = 1; i < selectedItemIds.length; i++) {
-      const secondaryId = selectedItemIds[i];
-      const secondaryItem = paper.project.getItems({}).find((it: any) => it.data?.id === secondaryId);
-      if (!secondaryItem || !(secondaryItem instanceof paper.Path)) continue;
-
-      switch (operation) {
-        case 'union':
-          resultPath = resultPath.unite(secondaryItem);
-          break;
-        case 'intersect':
-          resultPath = resultPath.intersect(secondaryItem);
-          break;
-        case 'subtract':
-          resultPath = resultPath.subtract(secondaryItem);
-          break;
+    const [primary, ...rest] = paperItems;
+    let result: paper.PathItem = primary;
+    for (const next of rest) {
+      if (operation === 'union') {
+        result = result.unite(next, { insert: false });
+      } else if (operation === 'intersect') {
+        result = result.intersect(next, { insert: false });
+      } else {
+        result = result.subtract(next, { insert: false });
       }
     }
 
-    // Remove old items
-    selectedItemIds.forEach(id => {
-      const item = paper.project.getItems({}).find((it: any) => it.data?.id === id);
-      if (item) item.remove();
-    });
+    const pathData = result.pathData;
+    if (!pathData) {
+      setItems(prev => prev.filter(item => !selectedItemIds.includes(item.id)));
+      setSelectedItemIds([]);
+      setSelectedProps(null);
+      return;
+    }
 
-    // Add new combined item
-    resultPath.data = { id: primaryId };
-    applyItemStyle(resultPath, {
-      fillColor: 'red', // Default style for result
-      strokeColor: '#000000',
-      strokeWidth: 2,
-      opacity: 1,
-    });
+    const primaryData = items.find(item => item.id === selectedItemIds[0]);
+    const newId = nextId;
+    const newItem: ItemData = {
+      id: newId,
+      pathData,
+      fillColor: primaryData?.fillColor ?? 'none',
+      strokeColor: primaryData?.strokeColor ?? '#111111',
+      strokeWidth: primaryData?.strokeWidth ?? 3,
+      opacity: primaryData?.opacity ?? 1,
+      blendMode: primaryData?.blendMode ?? 'normal',
+    };
 
-    // Update items state - replace primary with new path
-    // This is complex, need to update the items array
-    // For now, just clear selection
-    setSelectedItemIds([]);
-    setSelectedProps(null);
-    paper.view.update();
+    setItems(prev => [...prev.filter(item => !selectedItemIds.includes(item.id)), newItem]);
+    setNextId(newId + 1);
+    setSelectedItemIds([newId]);
+    setSelectedProps({
+      fillColor: newItem.fillColor!,
+      strokeColor: newItem.strokeColor!,
+      strokeWidth: newItem.strokeWidth!,
+      opacity: newItem.opacity!,
+      blendMode: newItem.blendMode!,
+    });
   };
+
+  const canBoolean = selectedItemIds.length >= 2;
 
   return (
     <div className="sidebar">
@@ -128,14 +146,29 @@ export default function Sidebar() {
       <section className="sidebar-section">
         <h3 className="sidebar-heading">Boolean Operations</h3>
         <div className="boolean-actions">
-          <button className="boolean-action-btn" title="Union">
+          <button
+            className="boolean-action-btn"
+            title="Union all selected"
+            disabled={!canBoolean}
+            onClick={() => handleBooleanOp('union')}
+          >
             <Merge size={16} /> Union
           </button>
-          <button className="boolean-action-btn" title="Intersect">
+          <button
+            className="boolean-action-btn"
+            title="Intersect all selected"
+            disabled={!canBoolean}
+            onClick={() => handleBooleanOp('intersect')}
+          >
             <Component size={16} /> Intersect
           </button>
-          <button className="boolean-action-btn" title="Subtract">
-            <MinusCircle size={16} /> Subtract
+          <button
+            className="boolean-action-btn"
+            title="Subtract secondary selection from primary"
+            disabled={!canBoolean}
+            onClick={() => handleBooleanOp('subtract')}
+          >
+            <MinusCircle size={16} /> Difference
           </button>
         </div>
       </section>
@@ -215,33 +248,6 @@ export default function Sidebar() {
         ) : (
           <p className="sidebar-empty">No object selected</p>
         )}
-      </section>
-
-      <section className="sidebar-section">
-        <h3>Boolean Operations</h3>
-        <div className="boolean-ops">
-          <button
-            onClick={() => handleBooleanOp('union')}
-            disabled={selectedItemIds.length < 2}
-            title="Union: Combine selected shapes"
-          >
-            Union
-          </button>
-          <button
-            onClick={() => handleBooleanOp('intersect')}
-            disabled={selectedItemIds.length < 2}
-            title="Intersect: Keep overlapping areas"
-          >
-            Intersect
-          </button>
-          <button
-            onClick={() => handleBooleanOp('subtract')}
-            disabled={selectedItemIds.length < 2}
-            title="Subtract: Remove secondary shapes from primary"
-          >
-            Subtract
-          </button>
-        </div>
       </section>
     </div>
   );

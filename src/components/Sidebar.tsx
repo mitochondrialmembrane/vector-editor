@@ -3,6 +3,7 @@ import paper from 'paper';
 import { Eye, Lock, Merge, Component, MinusCircle } from 'lucide-react';
 import { useDocument, type ItemData } from '../context/DocumentContext';
 import type { SelectedItemProps } from '../context/DocumentContext';
+import { applyBooleanFold, isClosedPathData, itemSize } from '../lib/booleanOps';
 
 const BAUHAUS_PALETTE = [
   { name: 'Red', hex: '#D22B2B' },
@@ -68,8 +69,14 @@ export default function Sidebar() {
     applyToPrimary(item => { item.blendMode = blendMode; }, { blendMode });
   };
 
+  const selectionHasOpen = selectedItemIds.some(id => {
+    const it = items.find(x => x.id === id);
+    return it ? !isClosedPathData(it.pathData) : false;
+  });
+
   const handleBooleanOp = (operation: 'union' | 'intersect' | 'subtract') => {
     if (selectedItemIds.length < 2) return;
+    if (operation === 'union' && selectionHasOpen) return;
 
     const paperItems = selectedItemIds
       .map(id => paper.project.getItem({ data: { id } }) as paper.PathItem | null)
@@ -77,30 +84,19 @@ export default function Sidebar() {
     if (paperItems.length < 2) return;
 
     const [primary, ...rest] = paperItems;
-    let result: paper.PathItem = primary;
-    for (const next of rest) {
-      if (operation === 'union') {
-        result = result.unite(next, { insert: false });
-      } else if (operation === 'intersect') {
-        result = result.intersect(next, { insert: false });
-      } else {
-        result = result.subtract(next, { insert: false });
-      }
-    }
+    const results = applyBooleanFold(operation, primary, rest).filter(r => !!r.pathData);
 
-    const pathData = result.pathData;
-    if (!pathData) {
+    if (results.length === 0) {
       setItems(prev => prev.filter(item => !selectedItemIds.includes(item.id)));
       setSelectedItemIds([]);
       setSelectedProps(null);
       return;
     }
 
+    results.sort((a, b) => itemSize(b) - itemSize(a));
+
     const primaryData = items.find(item => item.id === selectedItemIds[0]);
-    const newId = nextId;
-    const newItem: ItemData = {
-      id: newId,
-      pathData,
+    const style = {
       fillColor: primaryData?.fillColor ?? 'none',
       strokeColor: primaryData?.strokeColor ?? '#111111',
       strokeWidth: primaryData?.strokeWidth ?? 3,
@@ -108,19 +104,27 @@ export default function Sidebar() {
       blendMode: primaryData?.blendMode ?? 'normal',
     };
 
-    setItems(prev => [...prev.filter(item => !selectedItemIds.includes(item.id)), newItem]);
-    setNextId(newId + 1);
-    setSelectedItemIds([newId]);
+    let nid = nextId;
+    const newItems: ItemData[] = results.map(piece => ({
+      id: nid++,
+      pathData: piece.pathData,
+      ...style,
+    }));
+
+    setItems(prev => [...prev.filter(item => !selectedItemIds.includes(item.id)), ...newItems]);
+    setNextId(nid);
+    setSelectedItemIds(newItems.map(it => it.id));
     setSelectedProps({
-      fillColor: newItem.fillColor!,
-      strokeColor: newItem.strokeColor!,
-      strokeWidth: newItem.strokeWidth!,
-      opacity: newItem.opacity!,
-      blendMode: newItem.blendMode!,
+      fillColor: style.fillColor,
+      strokeColor: style.strokeColor,
+      strokeWidth: style.strokeWidth,
+      opacity: style.opacity,
+      blendMode: style.blendMode,
     });
   };
 
   const canBoolean = selectedItemIds.length >= 2;
+  const canUnion = canBoolean && !selectionHasOpen;
 
   return (
     <div className="sidebar">
@@ -148,8 +152,8 @@ export default function Sidebar() {
         <div className="boolean-actions">
           <button
             className="boolean-action-btn"
-            title="Union all selected"
-            disabled={!canBoolean}
+            title={selectionHasOpen ? "Union isn't defined for lines + shapes" : 'Union all selected'}
+            disabled={!canUnion}
             onClick={() => handleBooleanOp('union')}
           >
             <Merge size={16} /> Union
